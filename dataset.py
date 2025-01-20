@@ -90,10 +90,10 @@ def preprocess_data(imu_data, gps_data):
     return states, controls
 
 
-class MidAirDataset(torch.utils.data.Dataset):
-    """
+""" class MidAirDataset(torch.utils.data.Dataset):
+    
     Dataset class for Mid-Air quadrotor data.
-    """
+    
 
     def __init__(self, BASE_PATH, weather_condition='clear'):
         self.base_path = BASE_PATH
@@ -115,13 +115,119 @@ class MidAirDataset(torch.utils.data.Dataset):
 
         return processed_data
     
+    def _get_trajectory_path(self, trajectory_id: str) -> str:
+        Get full path to trajectory HDF5 file.
+        return os.path.join(self.base_path, 'trajectories', 
+                          self.weather_condition, f'{trajectory_id}.h5')
+    
     def __len__(self):
         return len(self.data)
     
     def __getitem__(self, idx):
-        return self.data[idx]
+        return self.data[idx] """
+
+class MidAirDataset(Dataset):
+    def __init__(self, hdf5_path):
+        """
+        Initialize dataset from HDF5 file containing multiple trajectories.
+        
+        Args:
+            hdf5_path: Path to the HDF5 file containing flight data
+        """
+        self.hdf5_path = hdf5_path
+        self.data = self.prepare_data()
     
+    def prepare_data(self):
+        """
+        Load and preprocess data from HDF5 file.
+        Returns a list of (state, control) pairs for all trajectories.
+        """
+        processed_data = []
+        
+        with h5py.File(self.hdf5_path, 'r') as f:
+            # Get all trajectory groups
+            trajectory_groups = [key for key in f.keys() if key.startswith('trajectory_')]
+            
+            for traj_name in trajectory_groups:
+                traj_group = f[traj_name]
+                
+                # Load IMU data (100Hz)
+                imu_data = traj_group['imu']
+                gyro = imu_data['gyroscope'][:]  # Angular velocities
+                accel = imu_data['accelerometer'][:]  # Linear accelerations
+                
+                # Load groundtruth data (100Hz)
+                gt = traj_group['groundtruth']
+                attitude = gt['attitude'][:]  # Note: shape is (N, 4) - might be quaternions
+                position = gt['position'][:]
+                velocity = gt['velocity'][:]
+                angular_velocity = gt['angular_velocity'][:]
+                
+                # Process data to 25Hz (downsample by taking every 4th sample)
+                sample_rate = 4  # 100Hz to 25Hz
+                
+                for i in range(0, len(accel), sample_rate):
+                    # Get current sample indices
+                    idx = i
+                    next_idx = min(i + sample_rate, len(accel))
+                    
+                    # Calculate derivatives (using finite differences)
+                    v_dot = np.mean(accel[idx:next_idx], axis=0)
+                    omega_dot = (gyro[next_idx-1] - gyro[idx]) / (sample_rate/100.0) if next_idx > idx else np.zeros(3)
+                    
+                    # Get current state values
+                    v = velocity[idx]
+                    omega = angular_velocity[idx]
+                    
+                    # Convert quaternion to euler angles if needed
+                    if attitude.shape[1] == 4:
+                        # Implement quaternion to euler conversion here if needed
+                        # For now, assuming the first three components are euler angles
+                        phi, theta, psi = attitude[idx][:3]
+                    else:
+                        phi, theta, psi = attitude[idx][:3]
+                    
+                    # Create state vector
+                    state = np.concatenate([
+                        v_dot,              # Linear accelerations (3)
+                        omega_dot,          # Angular accelerations (3)
+                        v,                  # Linear velocities (3)
+                        omega,              # Angular velocities (3)
+                        [phi, theta],       # Roll and pitch (2)
+                        [np.sin(psi), np.cos(psi)]  # Yaw encoding (2)
+                    ])
+                    
+                    # Create synthetic PWM values based on accelerations and velocities
+                    hover_thrust = 0.5  # Base thrust for hovering
+                    vertical_adjust = 0.1 * v_dot[2]  # Adjustment based on vertical acceleration
+                    roll_pitch_adjust = 0.05 * (abs(phi) + abs(theta))  # Adjustment based on attitude
+                    yaw_adjust = 0.03 * omega[2]  # Adjustment based on yaw rate
+                    
+                    # Individual motor commands
+                    pwm1 = hover_thrust + vertical_adjust + roll_pitch_adjust + yaw_adjust
+                    pwm2 = hover_thrust + vertical_adjust - roll_pitch_adjust + yaw_adjust
+                    pwm3 = hover_thrust + vertical_adjust + roll_pitch_adjust - yaw_adjust
+                    pwm4 = hover_thrust + vertical_adjust - roll_pitch_adjust - yaw_adjust
+                    
+                    # Combine and clip PWM values
+                    pwm_values = np.clip([pwm1, pwm2, pwm3, pwm4], 0, 1)
+                    
+                    # Convert to torch tensors
+                    state_tensor = torch.FloatTensor(state)
+                    pwm_tensor = torch.FloatTensor(pwm_values)
+                    
+                    processed_data.append((state_tensor, pwm_tensor))
+        
+        print(f"Loaded {len(processed_data)} total samples from {len(trajectory_groups)} trajectories")
+        return processed_data
     
+    def __len__(self):
+        return len(self.data)
+    
+    def __getitem__(self, idx):
+        return self.data[idx]    
+    
+
 def create_dataLoaders(dataset, batch_size=64, split=[0.7, 0.15, 0.15]):
     """
     Create train/val/test dataloaders.

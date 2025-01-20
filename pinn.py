@@ -1,14 +1,16 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
+from scipy.stats import chi2
 
 class QuadrotorPINN(nn.Module):
-    def __init__(self, input_dim=15, hidden_dim=25, num_layers=10, output_dim=4):
+    def __init__(self, input_dim=16, hidden_dim=25, num_layers=10, output_dim=4):
         """
         Physics-Informed Neural Network for quadrotor dynamics modeling.
         
         Args:
-            input_dim: Dimension of input state vector (dimension: 15)
+            input_dim: Dimension of input state vector (dimension: 16)
                       [v_dot(3), omega_dot(3), v(3), omega(3), phi, theta, sin(psi), cos(psi)]
             hidden_dim: Number of neurons in each hidden layer (dimension: 25)
             num_layers: Number of hidden layers (dimension: 10)
@@ -134,3 +136,17 @@ class PhysicsInformedLoss:
         physics_loss = lambda_lm * self.local_monotonicity_loss(predictions, states)
         
         return mse_loss + physics_loss, mse_loss.item(), physics_loss.item()
+    
+    def compute_cce(predictions: torch.Tensor, states: torch.Tensor):
+
+        # Extract angular accelerations
+        angular_accels = states[:, 3:6].detach().cpu().numpy()
+        predictions = predictions.detach().cpu().numpy()
+            
+        # Compute covariance matrix
+        covariance = np.cov(angular_accels.T, predictions.T)
+            
+        # Compute eigenvalues and eigenvectors for visualization
+        eigenvals, eigenvecs = np.linalg.eigh(covariance)
+            
+        return eigenvals, eigenvecs
