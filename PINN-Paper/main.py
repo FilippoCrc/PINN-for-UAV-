@@ -6,6 +6,8 @@ from trainer import train_pinn
 import numpy as np
 import seaborn as sns
 from sklearn.preprocessing import StandardScaler
+from controller import StateController
+import os
 
 def visualize_training_history(history):
     """Visualizes the training progress including both MSE and physics-informed losses."""
@@ -87,23 +89,18 @@ def evaluate_model(model, test_loader, device):
             states, targets = states.to(device), targets.to(device)
             predictions = model(states)
             
-            # Store for later visualization
             predictions_list.append(predictions)
             states_list.append(states)
             targets_list.append(targets)
             
-            # Calculate MSE
             test_loss += torch.nn.functional.mse_loss(predictions, targets).item()
     
-    # Combine all batches
     all_predictions = torch.cat(predictions_list)
     all_states = torch.cat(states_list)
     all_targets = torch.cat(targets_list)
     
-    # Print test metrics
     print(f"\nTest MSE: {test_loss/len(test_loader):.6f}")
     
-    # Visualize physical consistency using CCE
     plot_covariance_confidence_ellipse(
         all_predictions, all_states, 
         "Physical Consistency Visualization (Test Data)"
@@ -111,19 +108,137 @@ def evaluate_model(model, test_loader, device):
     
     return test_loss/len(test_loader)
 
+def plot_test_results(time_steps, states, pwm_signals, scenario_name):
+    """
+    Visualizza i risultati del test per ogni scenario di volo
+    
+    Args:
+        time_steps: array dei passi temporali
+        states: array degli stati del sistema
+        pwm_signals: array dei segnali PWM
+        scenario_name: nome dello scenario testato
+    """
+    plt.figure(figsize=(15, 10))
+    
+    # Plot degli stati
+    plt.subplot(2, 1, 1)
+    plt.plot(time_steps, states)
+    plt.title(f'Stati durante {scenario_name}')
+    plt.xlabel('Time Step')
+    plt.ylabel('State Values')
+    plt.legend([f'State {i}' for i in range(states.shape[1])])
+    
+    # Plot dei segnali PWM
+    plt.subplot(2, 1, 2)
+    plt.plot(time_steps, pwm_signals)
+    plt.title('Segnali PWM')
+    plt.xlabel('Time Step')
+    plt.ylabel('PWM Values')
+    plt.legend(['Motor 1', 'Motor 2', 'Motor 3', 'Motor 4'])
+    
+    plt.tight_layout()
+    plt.show()
+
+def test_controller_extended(controller):
+    """
+    Test esteso del controller con diversi scenari di volo complessi
+    """
+    # Definiamo diversi scenari di test realistici
+    test_scenarios = [
+        {
+            "name": "Hover stabile",
+            "states": [(8, 0.1)],  # Mantieni quota
+            "duration": 50
+        },
+        {
+            "name": "Movimento diagonale",
+            "states": [(6, 0.1), (7, 0.1)],  # x e y simultaneamente
+            "duration": 100
+        },
+        {
+            "name": "Rotazione con movimento",
+            "states": [(6, 0.1), (12, 0.05)],  # Avanti con roll
+            "duration": 150
+        },
+        {
+            "name": "Manovra complessa",
+            "states": [(6, 0.1), (7, 0.1), (8, -0.05), (12, 0.02)],
+            "duration": 200
+        }
+    ]
+    
+    for scenario in test_scenarios:
+        print(f"\nTest scenario: {scenario['name']}")
+        
+        # Inizializziamo gli array per salvare i dati
+        current_state = torch.zeros(16)
+        states_history = []
+        pwm_history = []
+        time_steps = []
+        
+        # Simulazione per la durata specificata
+        for t in range(scenario['duration']):
+            desired_state = torch.zeros(16)
+            for state_idx, state_val in scenario['states']:
+                desired_state[state_idx] = state_val
+            
+            # Aggiorniamo il controller
+            result = controller.update(current_state, desired_state, dt=0.01)
+            
+            # Salviamo i dati per la visualizzazione
+            states_history.append(current_state.numpy())
+            pwm_history.append(result['pwm_signals'])
+            time_steps.append(t)
+            
+            # Stampiamo i risultati ogni 10 step
+            if t % 10 == 0:
+                print(f"\nTimestep {t}:")
+                print(f"PWM signals: {result['pwm_signals']}")
+                print(f"Error: {result['error']}")
+            
+            # Aggiorniamo lo stato corrente (simulazione semplificata)
+            current_state = current_state + (desired_state - current_state) * 0.01
+        
+        # Convertiamo le liste in array numpy per il plotting
+        states_history = np.array(states_history)
+        pwm_history = np.array(pwm_history)
+        
+        # Visualizziamo i risultati
+        plot_test_results(time_steps, states_history, pwm_history, scenario['name'])
+        
+        print(f"\nScenario {scenario['name']} completato")
+        print("Stato finale:")
+        print(current_state)
+
 def main():
     # Set device and random seed
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     torch.manual_seed(42)
     print(f"Using device: {device}")
     
+    # Get the correct path to the data file
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    data_path = os.path.join(current_dir, "sensor_records.hdf5")
+    
+    # Verify if file exists
+    if not os.path.exists(data_path):
+        print(f"Error: Data file not found at {data_path}")
+        print("Current directory:", current_dir)
+        print("Files in directory:", os.listdir(current_dir))
+        return
+
     # Create dataset and dataloaders
     print("\nLoading dataset...")
-    dataset = MidAirDataset("sensor_records.hdf5")  # Using your existing path
-    train_loader, val_loader, test_loader = create_dataLoaders(
-        dataset, batch_size=64
-    )
-    print(f"Dataset size: {len(dataset)}")
+    try:
+        dataset = MidAirDataset(data_path)
+        train_loader, val_loader, test_loader = create_dataLoaders(
+            dataset, batch_size=64
+        )
+        print(f"Dataset size: {len(dataset)}")
+    except Exception as e:
+        print(f"Error loading dataset: {e}")
+        print(f"Current directory contains: {os.listdir(current_dir)}")
+        return
     
     # Initialize model
     print("\nInitializing PINN...")
@@ -147,14 +262,25 @@ def main():
     print("\nEvaluating model on test set...")
     test_loss = evaluate_model(model, test_loader, device)
     
+    # Test del controller con scenari estesi
+    print("\nTesting state controller...")
+    controller = StateController(pinn_model=model)
+    
+    print("\nRunning extended controller tests...")
+    test_controller_extended(controller)
+
     # Save model
     print("\nSaving model...")
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'history': history,
-        'test_loss': test_loss
-    }, 'trained_pinn.pth')
-    print("Model saved to 'trained_pinn.pth'")
+    try:
+        save_path = os.path.join(current_dir, 'trained_pinn.pth')
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'history': history,
+            'test_loss': test_loss
+        }, save_path)
+        print(f"Model saved to {save_path}")
+    except Exception as e:
+        print(f"Error saving model: {e}")
 
 if __name__ == "__main__":
     main()
