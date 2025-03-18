@@ -4,15 +4,15 @@ import numpy as np
 import pandas as pd
 import os
 
-class QuadrotorDataset(Dataset):
+""" class QuadrotorDataset(Dataset):
     def __init__(self, state_folder, input_folder):
-        """
-        Dataset class for loading quadrotor state and input data.
         
-        Args:
-            state_folder: Path to the folder containing state CSV files.
-            input_folder: Path to the folder containing input CSV files.
-        """
+        # Dataset class for loading quadrotor input and state data.
+        
+        # Args:
+        #     state_folder: Path to the folder containing state CSV files.
+        #     input_folder: Path to the folder containing input CSV files.
+        
         self.state_folder = state_folder
         self.input_folder = input_folder
         
@@ -21,6 +21,39 @@ class QuadrotorDataset(Dataset):
         self.input_files = sorted([os.path.join(input_folder, f) for f in os.listdir(input_folder) if f.endswith('.csv')])
         
         # Load data into memory
+        self.inputs = []
+        self.states = []
+        
+        for input_file, state_file in zip(self.input_files, self.state_files):
+            input_data = pd.read_csv(input_file, header=None).values
+            state_data = pd.read_csv(state_file, header=None).values
+            self.inputs.append(input_data)
+            self.states.append(state_data)
+        
+        # Concatenate all data
+        self.inputs = np.concatenate(self.inputs, axis=0)
+        self.states = np.concatenate(self.states, axis=0)
+        
+        # Convert to PyTorch tensors
+        self.inputs = torch.tensor(self.inputs, dtype=torch.float32)
+        self.states = torch.tensor(self.states, dtype=torch.float32)
+    
+    def __len__(self):
+        return len(self.inputs)
+    
+    def __getitem__(self, idx):
+        return self.inputs[idx], self.states[idx] """
+
+class QuadrotorDataset(Dataset):
+    def __init__(self, state_folder, input_folder):
+        self.state_folder = state_folder
+        self.input_folder = input_folder
+        
+        # Load all files
+        self.state_files = sorted([os.path.join(state_folder, f) for f in os.listdir(state_folder) if f.endswith('.csv')])
+        self.input_files = sorted([os.path.join(input_folder, f) for f in os.listdir(input_folder) if f.endswith('.csv')])
+        
+        # Load and concatenate data
         self.states = []
         self.inputs = []
         
@@ -30,19 +63,27 @@ class QuadrotorDataset(Dataset):
             self.states.append(state_data)
             self.inputs.append(input_data)
         
-        # Concatenate all data
         self.states = np.concatenate(self.states, axis=0)
         self.inputs = np.concatenate(self.inputs, axis=0)
+
+        # 1. Add Normalization Here
+        from sklearn.preprocessing import StandardScaler
+        self.state_scaler = StandardScaler()
+        self.input_scaler = StandardScaler()
         
-        # Convert to PyTorch tensors
+        # Fit on full dataset (temporary solution)
+        self.states = self.state_scaler.fit_transform(self.states)  # Normalize states
+        self.inputs = self.input_scaler.fit_transform(self.inputs)  # Normalize inputs
+
+        # Convert to tensors
         self.states = torch.tensor(self.states, dtype=torch.float32)
         self.inputs = torch.tensor(self.inputs, dtype=torch.float32)
     
     def __len__(self):
-        return len(self.states)
+        return len(self.inputs)
     
     def __getitem__(self, idx):
-        return self.states[idx], self.inputs[idx]
+        return self.inputs[idx], self.states[idx]  # (normalized_input, normalized_state)
 
 def create_dataloaders(dataset, batch_size=64, train_ratio=0.7, val_ratio=0.15):
     """
