@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from pinn import QuadrotorPINN
 from pinn import PhysicsInformedLoss
 
-def train_pinn(model, train_loader, val_loader, num_epochs=300, learning_rate=1e-3):
+def train_pinn(model, train_loader, val_loader, num_epochs=1000, learning_rate=1e-3):
     """
     Train the Physics-Informed Neural Network.
     

@@ -5,7 +5,7 @@ import numpy as np
 from scipy.stats import chi2
 
 class QuadrotorPINN(nn.Module):
-    def __init__(self, input_dim=16, hidden_dim=25, num_layers=10, output_dim=4):
+    def __init__(self, input_dim=13, hidden_dim=25, num_layers=10, output_dim=5):
         """
         Physics-Informed Neural Network for quadrotor dynamics modeling.
         
