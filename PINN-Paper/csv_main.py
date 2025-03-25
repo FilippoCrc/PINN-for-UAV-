@@ -7,6 +7,8 @@ import numpy as np
 import seaborn as sns
 from sklearn.preprocessing import StandardScaler
 
+NUM_EPOCHS = 2000
+
 def visualize_training_history(history):
     """Visualizes the training progress including both MSE and physics-informed losses."""
     plt.figure(figsize=(15, 5))
@@ -41,34 +43,32 @@ def visualize_training_history(history):
     plt.tight_layout()
     plt.show()
 
-def plot_covariance_confidence_ellipse(predictions, states, title):
-    """Creates CCE visualization as described in the paper."""
-    # Extract angular accelerations (omega_dot)
-    angular_accels = states[:, 3:6].cpu().numpy()
+def plot_covariance_confidence_ellipse(predictions, inputs, title):
+    """Updated CCE visualization for 3-axis systems."""
+    # Extract angular accelerations from PREDICTIONS (not ground truth)
+    angular_accels = predictions[:, 3:6].cpu().numpy()  # Use model outputs
     predictions = predictions.cpu().numpy()
     
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    axes_labels = ['Roll', 'Pitch', 'Yaw']
+    # Create subplots only for existing axes
+    valid_axes = min(angular_accels.shape[1], 3)  # Handle <3 dimensions
+    fig, axes = plt.subplots(1, valid_axes, figsize=(5*valid_axes, 5))
     
-    for i in range(3):
-        # Compute 2D mean and covariance
-        data = np.column_stack([angular_accels[:, i], predictions[:, i]])
+    for i in range(valid_axes):
+        data = np.column_stack([angular_accels[:, i], predictions[:, 0]])  # Compare with first prediction dimension
         mean = np.mean(data, axis=0)
         cov = np.cov(data.T)
-        
-        # Create ellipse points
+
         eigenvals, eigenvecs = np.linalg.eigh(cov)
         angle = np.degrees(np.arctan2(eigenvecs[1, 0], eigenvecs[0, 0]))
         
-        # Plot data points and ellipse
         axes[i].scatter(data[:, 0], data[:, 1], alpha=0.5)
         axes[i].add_patch(plt.matplotlib.patches.Ellipse(
             mean, 3*np.sqrt(eigenvals[0]), 3*np.sqrt(eigenvals[1]),
             angle=angle, fill=False, color='red'
         ))
-        axes[i].set_title(f'{axes_labels[i]} Motion')
+        axes[i].set_title(f'Motion Axis {i+1}')
         axes[i].set_xlabel('Angular Acceleration')
-        axes[i].set_ylabel('PWM Signal')
+        axes[i].set_ylabel('State Prediction')
     
     plt.suptitle(title)
     plt.tight_layout()
@@ -83,13 +83,13 @@ def evaluate_model(model, test_loader, device):
     targets_list = []
     
     with torch.no_grad():
-        for states, targets in test_loader:
-            states, targets = states.to(device), targets.to(device)
-            predictions = model(states)
+        for inputs, targets in test_loader:
+            input, targets = input.to(device), targets.to(device)
+            predictions = model(inputs)  # Model now predicts states
             
             # Store for later visualization
             predictions_list.append(predictions)
-            states_list.append(states)
+            states_list.append(inputs)
             targets_list.append(targets)
             
             # Calculate MSE
@@ -103,11 +103,16 @@ def evaluate_model(model, test_loader, device):
     # Print test metrics
     print(f"\nTest MSE: {test_loss/len(test_loader):.6f}")
     
-    # Visualize physical consistency using CCE
+     # Visualize using predictions only
     plot_covariance_confidence_ellipse(
-        all_predictions, all_states, 
+        all_predictions,  # Pass predictions as both arguments
+        all_predictions,  # Use predictions for angular accels
         "Physical Consistency Visualization (Test Data)"
     )
+
+    # ADDED NEW
+    plt.plot(all_targets[:100, 0].cpu(), label='True Position')
+    plt.plot(all_predictions[:100, 0].cpu(), label='Predicted Position')
     
     return test_loss/len(test_loader)
 
@@ -124,22 +129,21 @@ def main():
         input_folder="UAV_dataset/input_dataset"   # Update with your input folder path
     )
     
-    train_loader, val_loader, test_loader = create_dataloaders(
-        dataset, batch_size=64
-    )
+    train_loader, val_loader, test_loader = create_dataloaders(dataset, batch_size=64)
+
     print(f"Dataset size: {len(dataset)}")
     
-    # Initialize model (no changes needed to QuadrotorPINN)
+    # Initialize model
     print("\nInitializing PINN...")
-    model = QuadrotorPINN().to(device)
+    model = QuadrotorPINN(input_dim=4, output_dim=12).to(device)
     
-    # Train model (no changes needed to train_pinn)
+    # Train model
     print("\nStarting training...")
     history = train_pinn(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
-        num_epochs=1000,
+        num_epochs=NUM_EPOCHS,
         learning_rate=1e-3
     )
     
