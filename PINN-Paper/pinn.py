@@ -5,7 +5,7 @@ import numpy as np
 from scipy.stats import chi2
 
 class QuadrotorPINN(nn.Module):
-    def __init__(self, input_dim=5, hidden_dim=25, num_layers=10, output_dim=13):
+    def __init__(self, input_dim=4, hidden_dim=45, num_layers=10, output_dim=12):
         """
         Physics-Informed Neural Network for quadrotor dynamics modeling.
         
@@ -116,8 +116,9 @@ class PhysicsInformedLoss:
         """Updated call signature (no need for input states)"""
         mse_loss = F.mse_loss(predictions, targets)
         lambda_lm = self.get_lambda(epoch)
-        physics_loss = lambda_lm * self.local_monotonicity_loss(predictions)
-        return mse_loss + physics_loss, mse_loss.item(), physics_loss.item()
+        #physics_loss = lambda_lm * self.local_monotonicity_loss(predictions)
+        #return mse_loss + physics_loss, mse_loss.item(), physics_loss.item()
+        return mse_loss, mse_loss.item(), 0.0
     
     def compute_cce(predictions: torch.Tensor, states: torch.Tensor):
 

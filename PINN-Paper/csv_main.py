@@ -7,6 +7,8 @@ import numpy as np
 import seaborn as sns
 from sklearn.preprocessing import StandardScaler
 
+NUM_EPOCHS = 2000
+
 def visualize_training_history(history):
     """Visualizes the training progress including both MSE and physics-informed losses."""
     plt.figure(figsize=(15, 5))
@@ -41,7 +43,7 @@ def visualize_training_history(history):
     plt.tight_layout()
     plt.show()
 
-def plot_covariance_confidence_ellipse(predictions, states, title):
+def plot_covariance_confidence_ellipse(predictions, inputs, title):
     """Updated CCE visualization for 3-axis systems."""
     # Extract angular accelerations from PREDICTIONS (not ground truth)
     angular_accels = predictions[:, 3:6].cpu().numpy()  # Use model outputs
@@ -55,7 +57,7 @@ def plot_covariance_confidence_ellipse(predictions, states, title):
         data = np.column_stack([angular_accels[:, i], predictions[:, 0]])  # Compare with first prediction dimension
         mean = np.mean(data, axis=0)
         cov = np.cov(data.T)
-        
+
         eigenvals, eigenvecs = np.linalg.eigh(cov)
         angle = np.degrees(np.arctan2(eigenvecs[1, 0], eigenvecs[0, 0]))
         
@@ -81,13 +83,13 @@ def evaluate_model(model, test_loader, device):
     targets_list = []
     
     with torch.no_grad():
-        for states, targets in test_loader:
-            states, targets = states.to(device), targets.to(device)
-            predictions = model(states)
+        for inputs, targets in test_loader:
+            input, targets = input.to(device), targets.to(device)
+            predictions = model(inputs)  # Model now predicts states
             
             # Store for later visualization
             predictions_list.append(predictions)
-            states_list.append(states)
+            states_list.append(inputs)
             targets_list.append(targets)
             
             # Calculate MSE
@@ -107,6 +109,10 @@ def evaluate_model(model, test_loader, device):
         all_predictions,  # Use predictions for angular accels
         "Physical Consistency Visualization (Test Data)"
     )
+
+    # ADDED NEW
+    plt.plot(all_targets[:100, 0].cpu(), label='True Position')
+    plt.plot(all_predictions[:100, 0].cpu(), label='Predicted Position')
     
     return test_loss/len(test_loader)
 
@@ -129,7 +135,7 @@ def main():
     
     # Initialize model
     print("\nInitializing PINN...")
-    model = QuadrotorPINN(input_dim=5, output_dim=13).to(device)
+    model = QuadrotorPINN(input_dim=4, output_dim=12).to(device)
     
     # Train model
     print("\nStarting training...")
@@ -137,7 +143,7 @@ def main():
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
-        num_epochs=1000,
+        num_epochs=NUM_EPOCHS,
         learning_rate=1e-3
     )
     
