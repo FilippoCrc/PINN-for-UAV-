@@ -7,7 +7,7 @@ import numpy as np
 import seaborn as sns
 from sklearn.preprocessing import StandardScaler
 
-NUM_EPOCHS = 2000
+NUM_EPOCHS = 20
 
 def visualize_training_history(history):
     """Visualizes the training progress including both MSE and physics-informed losses."""
@@ -125,8 +125,8 @@ def main():
     # Create dataset and dataloaders
     print("\nLoading dataset...")
     dataset = QuadrotorDataset(
-        state_folder="UAV_dataset/state_dataset",  # Update with your state folder path
-        input_folder="UAV_dataset/input_dataset"   # Update with your input folder path
+        input_folder="UAV_dataset/state_dataset",  # Update with your state folder path
+        state_folder="UAV_dataset/input_dataset"   # Update with your input folder path
     )
     
     train_loader, val_loader, test_loader = create_dataloaders(dataset, batch_size=64)
@@ -135,7 +135,7 @@ def main():
     
     # Initialize model
     print("\nInitializing PINN...")
-    model = QuadrotorPINN(input_dim=4, output_dim=12).to(device)
+    model = QuadrotorPINN(input_dim=12, output_dim=4).to(device)
     
     # Train model
     print("\nStarting training...")
