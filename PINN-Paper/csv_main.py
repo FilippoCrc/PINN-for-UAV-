@@ -6,7 +6,7 @@ from trainer import train_pinn # OK
 import numpy as np
 import os # Per gestire i path
 
-NUM_EPOCHS = 1000 # Riduci per debug iniziale se necessario
+NUM_EPOCHS = 2000 # Riduci per debug iniziale se necessario
 LEARNING_RATE = 1e-3
 PHYSICS_LOSS_WEIGHT = 1000 # Puoi cambiare il peso qui
 BATCH_SIZE = 128
