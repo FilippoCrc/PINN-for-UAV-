@@ -65,71 +65,95 @@ class QuadrotorPINN(nn.Module):
         return x
     
 class PhysicsInformedLoss:
-    def __init__(self, lambda_max=0.1, num_cycles=5, total_epochs=300, maintain_ratio=0.5):
-        self.lambda_max = lambda_max
-        self.num_cycles = num_cycles
-        self.total_epochs = total_epochs
-        self.maintain_ratio = maintain_ratio
-        
-    """ def local_monotonicity_loss(self, predicted_states):
-        #Calculate physics loss using PREDICTED STATES#
-        # Extract angular accelerations (omega_dot) from predicted states [indices 3-6]
-        angular_accels = predicted_states[:, 3:6]  # Shape: (batch_size, 3)
-        
-        # Calculate consecutive differences in predictions and angular accelerations
-        state_diff = predicted_states[1:] - predicted_states[:-1]  # Δstate
-        accel_diff = angular_accels[1:] - angular_accels[:-1]      # Δomega_dot
-        
-        # Direction consistency using tanh
-        state_direction = torch.tanh(state_diff[:, 3:6])  # Match angular acceleration indices
-        accel_direction = torch.tanh(accel_diff)
-        
-        # Consistency loss for roll, pitch, yaw
-        loss_roll = torch.mean(1 - state_direction[:, 0] * accel_direction[:, 0])
-        loss_pitch = torch.mean(1 - state_direction[:, 1] * accel_direction[:, 1])
-        loss_yaw = torch.mean(1 - state_direction[:, 2] * accel_direction[:, 2])
-        
-        return loss_roll + loss_pitch + loss_yaw """
-    
-    def local_monotonicity_loss(self, predicted_states):
-        # Verify these indices match your state vector's angular acceleration positions
-        angular_accels = predicted_states[:, 3:6]  # Adjust indices if needed
-        
-        # Add numerical stability
-        state_diff = predicted_states[1:] - predicted_states[:-1] + 1e-7
-        accel_diff = angular_accels[1:] - angular_accels[:-1] + 1e-7
-        
-        # Use smoother directional measure
-        state_direction = torch.atan(state_diff[:, 3:6])  # More stable than tanh
-        accel_direction = torch.atan(accel_diff)
-        
-        # Component-wise cosine similarity
-        cos_sim = F.cosine_similarity(state_direction, accel_direction, dim=1)
-        return torch.mean(1 - cos_sim)
+    # Modifica __init__ per accettare lo state_scaler
+    def __init__(self, state_scaler, lambda_physics=0.1): # Rimosso lambda_max etc se non usati
+        """
+        Args:
+            state_scaler: Lo scaler StandardScaler fittato sugli stati (x..wz).
+                          Serve per denormalizzare le velocità angolari predette.
+            lambda_physics: Peso per il termine di loss fisica.
+        """
+        if state_scaler is None:
+             raise ValueError("state_scaler must be provided to PhysicsInformedLoss")
+        self.state_scaler = state_scaler
+        self.lambda_physics = lambda_physics
 
-    def get_lambda(self, epoch):
-        cycle_length = self.total_epochs // self.num_cycles
-        cycle_position = (epoch % cycle_length) / cycle_length
-        return self.lambda_max * (1 - abs(cycle_position - self.maintain_ratio)/self.maintain_ratio)
-    
-    def __call__(self, predictions, targets, epoch):
-        """Updated call signature (no need for input states)"""
+        # Parametri fisici
+        self.m = 1.5
+        self.g = torch.tensor([0, 0, -9.81]) # Non usato in questa loss specifica
+        self.J = torch.diag(torch.tensor([0.0146, 0.0168, 0.0309]))
+
+        # Estrai media e scala per le velocità angolari (indici 9, 10, 11 nello stato x..wz)
+        # E convertili subito a tensori (fallo una sola volta qui)
+        omega_mean_np = self.state_scaler.mean_[9:12]
+        omega_scale_np = self.state_scaler.scale_[9:12]
+        self.omega_mean = torch.tensor(omega_mean_np, dtype=torch.float32)
+        self.omega_scale = torch.tensor(omega_scale_np, dtype=torch.float32)
+
+
+    # Modifica __call__ per accettare physics_info e usare lo scaler
+    def __call__(self, predictions, targets, physics_info, epoch):
+        """
+        Calcola la loss combinata MSE + Physics.
+
+        Args:
+            predictions: Output del modello (stati scalati, x..wz), shape (B, 12).
+            targets: Stati target reali (scalati, x..wz), shape (B, 12).
+            physics_info: Tensore contenente [tempo, tau_x, tau_y, tau_z] NON scalati, shape (B, 4).
+            epoch: Numero epoca attuale (non usato qui ma mantenuto per interfaccia).
+
+        Returns:
+            total_loss, mse_loss_item, physics_loss_item
+        """
+        # 1. MSE Loss (tra predizioni scalate e target scalati)
         mse_loss = F.mse_loss(predictions, targets)
-        lambda_lm = self.get_lambda(epoch)
-        #physics_loss = lambda_lm * self.local_monotonicity_loss(predictions)
-        #return mse_loss + physics_loss, mse_loss.item(), physics_loss.item()
-        return mse_loss, mse_loss.item(), 0.0
-    
-    def compute_cce(predictions: torch.Tensor, states: torch.Tensor):
 
-        # Extract angular accelerations
+        # Sposta media e scala sul device corretto (una volta per batch)
+        current_device = predictions.device
+        omega_mean = self.omega_mean.to(current_device)
+        omega_scale = self.omega_scale.to(current_device)
+        J = self.J.to(current_device)
+
+        # 2. Physics Loss
+        # Estrai tempo e coppie NON SCALATE da physics_info
+        t = physics_info[:, 0]         # Tempo, shape (B,)
+        tau = physics_info[:, 1:4]     # Coppie tau_x,y,z, shape (B, 3)
+
+        # Estrai omega SCALATO dalle predizioni (indici 9, 10, 11)
+        omega_scaled = predictions[:, 9:12] # Shape (B, 3)
+
+        # Denormalizza omega
+        # Assicurati che le operazioni siano broadcastable
+        omega = omega_scaled * omega_scale.unsqueeze(0) + omega_mean.unsqueeze(0) # Shape (B, 3)
+
+        #aggiunta equazione completa
+
+        delta_t = t[1:] - t[:-1]
+        delta_omega = omega[1:] - omega[:-1]
+        epsilon = 1e-6
+        omega_dot = delta_omega / (delta_t.unsqueeze(1) + epsilon)
+        omega_trimmed = omega[:-1]
+        tau_trimmed = tau[:-1]
+        I_omega_dot = torch.einsum('ij,bj->bi', J, omega_dot)
+
+        J_omega = torch.einsum('ij,bj->bi', J, omega_trimmed) # (3,3) x (B,3) -> (B,3)
+
+        cross_term = torch.cross(omega_trimmed, J_omega, dim=1) # omega x (I*omega), shape (B, 3)
+
+        # Calcola il residuo fisico: cross_term - tau
+        physics_residual = I_omega_dot + cross_term - tau_trimmed # Shape (B, 3)
+        physics_loss = torch.mean(physics_residual ** 2)
+
+        mse_loss_trimmed = F.mse_loss(predictions[:-1], targets[:-1])
+
+        # 3. Loss Totale
+        total_loss = mse_loss_trimmed + self.lambda_physics * physics_loss
+
+        return total_loss, mse_loss_trimmed.item(), physics_loss.item()
+
+    def compute_cce(predictions: torch.Tensor, states: torch.Tensor):
         angular_accels = states[:, 3:6].detach().cpu().numpy()
         predictions = predictions.detach().cpu().numpy()
-            
-        # Compute covariance matrix
         covariance = np.cov(angular_accels.T, predictions.T)
-            
-        # Compute eigenvalues and eigenvectors for visualization
         eigenvals, eigenvecs = np.linalg.eigh(covariance)
-            
         return eigenvals, eigenvecs
