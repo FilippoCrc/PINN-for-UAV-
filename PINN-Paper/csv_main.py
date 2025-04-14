@@ -143,23 +143,19 @@ def main():
     np.random.seed(42)
     print(f"Using device: {device}")
 
-    # --- DEFINISCI I PATH CORRETTI QUI ---
-    script_dir = os.path.dirname(__file__) # Directory dello script corrente
-    base_dir = os.path.abspath(os.path.join(script_dir, '..')) # Directory PINN-for-UAV-
-    state_folder = os.path.join(base_dir, "UAV_dataset", "state_dataset")
-    input_folder = os.path.join(base_dir, "UAV_dataset", "input_dataset")
-    print(f"Looking for data in:\n State: {state_folder}\n Input: {input_folder}")
-    # ------------------------------------
+    state_csv_path = "state_results.csv"  # Path al tuo file CSV di stato
+    input_csv_path = "input_results.csv"  # Path al tuo file CSV di input
+    print(f"Looking for data files:\n State: {state_csv_path}\n Input: {input_csv_path}")
 
     print("\nLoading dataset...")
     try:
-        dataset = QuadrotorDataset(state_folder=state_folder, input_folder=input_folder)
-        # --- MODIFICA: create_dataloaders ora ritorna anche gli scaler ---
-        train_loader, val_loader, test_loader, state_scaler, input_scaler = create_dataloaders(
-            dataset, batch_size=BATCH_SIZE
-        )
-    except FileNotFoundError:
-        print(f"ERRORE: Path del dataset non trovato. Verifica:\n State: {state_folder}\n Input: {input_folder}")
+        dataset = QuadrotorDataset(state_csv_path=state_csv_path, input_csv_path=input_csv_path)
+
+        # create_dataloaders 
+        train_loader, val_loader, test_loader, state_scaler, input_scaler = create_dataloaders(dataset, batch_size=BATCH_SIZE)
+
+    except FileNotFoundError as e: # Aggiornato messaggio di errore
+        print(f"ERRORE: File del dataset non trovato. Dettagli: {e}")
         return
     except ValueError as e:
          print(f"ERRORE: Problema con i dati nel dataset: {e}")
@@ -168,17 +164,13 @@ def main():
         print(f"ERRORE durante il caricamento/scaling del dataset: {e}")
         return
 
-    print(f"Dataset size: {len(dataset)}")
-    if len(dataset) == 0:
-        print("ERRORE: Dataset vuoto.")
-        return
-
     print("\nInitializing PINN...")
     model = QuadrotorPINN(input_dim=4, output_dim=12).to(device)
 
     # --- MODIFICA: Inizializza criterion, optimizer, scheduler qui ---
     criterion = PhysicsInformedLoss(state_scaler=state_scaler, lambda_physics=PHYSICS_LOSS_WEIGHT)
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
+
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
         max_lr=LEARNING_RATE,

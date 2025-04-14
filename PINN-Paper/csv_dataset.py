@@ -7,99 +7,55 @@ from sklearn.preprocessing import StandardScaler
 
 class QuadrotorDataset(Dataset):
     """
-    Dataset per dati di quadrirotore, caricando stati e input da file CSV separati.
+    Dataset per dati di quadrirotore, caricando stati e input da SINGOLI file CSV specifici.
     Prepara i dati per essere usati con un modello e una loss fisica,
     gestendo la separazione di dati scalati e non scalati.
     """
-    def __init__(self, state_folder, input_folder):
+    # --- MODIFICA: Accetta path di file specifici invece di cartelle ---
+    def __init__(self, state_csv_path, input_csv_path):
         """
-        Inizializza il dataset caricando e pre-processando i dati.
+        Inizializza il dataset caricando e pre-processando i dati da file CSV specifici.
 
         Args:
-            state_folder (str): Path alla cartella contenente i file CSV degli stati.
-                                Formato atteso per file stato: (t, x, y, z, vx, vy, vz, roll, pitch, yaw, wx, wy, wz)
-            input_folder (str): Path alla cartella contenente i file CSV degli input.
-                                Formato atteso per file input: (t, thrust, tau_phi, tau_theta, tau_psi)
+            state_csv_path (str): Path al file CSV degli stati.
+                                   Formato atteso: (t, x, y, z, vx, vy, vz, roll, pitch, yaw, wx, wy, wz)
+            input_csv_path (str): Path al file CSV degli input.
+                                   Formato atteso: (t, thrust, tau_phi, tau_theta, tau_psi)
         """
-        self.state_folder = state_folder
-        self.input_folder = input_folder
+        self.state_csv_path = state_csv_path
+        self.input_csv_path = input_csv_path
 
-        # Trova e ordina i file per assicurare corrispondenza
+        print(f"Loading data from single files:\n State: {self.state_csv_path}\n Input: {self.input_csv_path}")
+
+        # --- CARICA DATI ORIGINALI DA FILE SINGOLI ---
         try:
-            self.state_files = sorted([os.path.join(state_folder, f) for f in os.listdir(state_folder) if f.endswith('.csv')])
-            self.input_files = sorted([os.path.join(input_folder, f) for f in os.listdir(input_folder) if f.endswith('.csv')])
+            # Carica TUTTE le colonne (incluso tempo)
+            state_data = pd.read_csv(self.state_csv_path, header=None).values
+            input_data = pd.read_csv(self.input_csv_path, header=None).values
+
         except FileNotFoundError as e:
-            raise FileNotFoundError(f"Errore nel trovare le cartelle: {e}. Verifica i path: State='{state_folder}', Input='{input_folder}'") from e
+            raise FileNotFoundError(f"Errore nel trovare i file CSV specificati: {e}. Verifica i path: State='{self.state_csv_path}', Input='{self.input_csv_path}'") from e
+        except pd.errors.EmptyDataError:
+            raise ValueError(f"Errore: File CSV vuoto trovato. State='{self.state_csv_path}', Input='{self.input_csv_path}'")
+        except Exception as e:
+            raise RuntimeError(f"Errore durante la lettura dei file CSV: {e}") from e
 
-        if not self.state_files or not self.input_files:
-            print(f"Warning: Nessun file CSV trovato in una o entrambe le cartelle: State='{state_folder}', Input='{input_folder}'")
-            # Potresti voler generare un errore qui se non è previsto che siano vuote
-            # raise ValueError("Nessun file CSV trovato nelle cartelle specificate.")
+        # Controlli di validità sui dati caricati
+        if state_data.shape[0] == 0 or input_data.shape[0] == 0:
+            raise ValueError(f"Uno o entrambi i file CSV sono vuoti dopo la lettura: State='{self.state_csv_path}', Input='{self.input_csv_path}'.")
+        if state_data.shape[0] != input_data.shape[0]:
+            raise ValueError(f"Mismatch in numero di righe tra file stato ({state_data.shape[0]}) e input ({input_data.shape[0]}). Files: State='{self.state_csv_path}', Input='{self.input_csv_path}'.")
+        if state_data.shape[1] != 13:
+            raise ValueError(f"Numero di colonne inatteso nel file stato {self.state_csv_path}. Atteso 13, Trovato {state_data.shape[1]}.")
+        if input_data.shape[1] != 5:
+            raise ValueError(f"Numero di colonne inatteso nel file input {self.input_csv_path}. Atteso 5, Trovato {input_data.shape[1]}.")
 
-        if len(self.state_files) != len(self.input_files):
-            print(f"Warning: Numero di file non corrispondente! State: {len(self.state_files)}, Input: {len(self.input_files)}. Verranno usate solo le coppie corrispondenti per nome (dopo l'ordinamento).")
-            # Potrebbe essere necessaria una logica più robusta per accoppiare i file se i nomi non bastano
+        print(f"Successfully loaded data. State shape: {state_data.shape}, Input shape: {input_data.shape}")
 
-        # --- CARICA DATI ORIGINALI ---
-        all_states_list = []
-        all_inputs_list = []
-        print(f"Loading data files...")
-        loaded_pairs = 0
-        skipped_pairs = 0
-        for state_file, input_file in zip(self.state_files, self.input_files):
-            # Verifica base sulla corrispondenza dei nomi file (opzionale, dipende dalla tua convenzione)
-            # state_basename = os.path.splitext(os.path.basename(state_file))[0]
-            # input_basename = os.path.splitext(os.path.basename(input_file))[0]
-            # if state_basename != input_basename:
-            #     print(f"Warning: Skipped non-matching file names: {state_file}, {input_file}")
-            #     skipped_pairs += 1
-            #     continue
-
-            try:
-                # Carica TUTTE le colonne (incluso tempo)
-                state_data = pd.read_csv(state_file, header=None).values
-                input_data = pd.read_csv(input_file, header=None).values
-
-                # Controlli di validità
-                if state_data.shape[0] == 0 or input_data.shape[0] == 0:
-                    print(f"Warning: Empty file content in {state_file} or {input_file}. Skipping pair.")
-                    skipped_pairs += 1
-                    continue
-                if state_data.shape[0] != input_data.shape[0]:
-                    print(f"Warning: Mismatch length {len(state_data)} vs {len(input_data)} in {state_file}, {input_file}. Skipping pair.")
-                    skipped_pairs += 1
-                    continue
-                if state_data.shape[1] != 13:
-                     print(f"Warning: Unexpected number of columns in state file {state_file} (Expected 13, Got {state_data.shape[1]}). Skipping pair.")
-                     skipped_pairs += 1
-                     continue
-                if input_data.shape[1] != 5:
-                     print(f"Warning: Unexpected number of columns in input file {input_file} (Expected 5, Got {input_data.shape[1]}). Skipping pair.")
-                     skipped_pairs += 1
-                     continue
-
-                all_states_list.append(state_data)
-                all_inputs_list.append(input_data)
-                loaded_pairs += 1
-            except pd.errors.EmptyDataError:
-                 print(f"Warning: EmptyDataError for {state_file} or {input_file}. Skipping.")
-                 skipped_pairs += 1
-                 continue
-            except Exception as e:
-                 print(f"Error processing file pair {state_file}, {input_file}: {e}. Skipping.")
-                 skipped_pairs += 1
-                 continue
-
-        if not all_states_list:
-             raise ValueError("No valid data loaded after checking files. Check paths, file contents, and formats.")
-        print(f"Successfully loaded {loaded_pairs} file pairs. Skipped {skipped_pairs} pairs.")
-
-        # Concatena tutti i dati originali
-        # Assume che la concatenazione mantenga l'ordine temporale se i file sono ordinati
-        self.original_states = np.concatenate(all_states_list, axis=0) # (N, 13) -> t, x...wz
-        self.original_inputs = np.concatenate(all_inputs_list, axis=0) # (N, 5)  -> t, thrust, taux, tauy, tauz
-        print(f"Total data points concatenated: {len(self.original_states)}")
-
+        # Assegna direttamente i dati caricati (nessuna concatenazione necessaria)
+        self.original_states = state_data # (N, 13) -> t, x...wz
+        self.original_inputs = input_data # (N, 5)  -> t, thrust, taux, tauy, tauz
+        print(f"Total data points loaded: {len(self.original_states)}")
 
         # --- PREPARA DATI PER MODELLO E MSE (SENZA TEMPO) ---
         # Stati per MSE (x..wz) -> verranno scalati
@@ -119,6 +75,8 @@ class QuadrotorDataset(Dataset):
 
     def __len__(self):
         """Restituisce il numero totale di campioni nel dataset."""
+        # Usa la lunghezza dei dati originali caricati
+        # Non è più necessario controllare self.scaled_states perché original_states è sempre definito se __init__ ha successo
         return len(self.original_states)
 
     def __getitem__(self, idx):
@@ -136,11 +94,12 @@ class QuadrotorDataset(Dataset):
         """
         # Controlla se i dati sono stati scalati (dovrebbe essere fatto da create_dataloaders)
         if self.scaled_inputs is None or self.scaled_states is None:
+             # Questo errore è meno probabile ora che il caricamento è più diretto, ma è una buona sicurezza
              raise RuntimeError("Dataset non è stato scalato. Chiamare prima create_dataloaders.")
 
         # 1. Input per il modello (scalato) + rumore
         scaled_input = self.scaled_inputs[idx]
-        # Considera se applicare rumore solo nel dataloader di training
+        # Considera se applicare rumore solo nel dataloader di training (questo lo aggiunge sempre)
         noise = torch.randn_like(scaled_input) * 0.02 # Aggiunge 2% di rumore gaussiano
         model_input = scaled_input + noise
 
@@ -153,7 +112,11 @@ class QuadrotorDataset(Dataset):
 
         return model_input, state_target, physics_info
 
-# --- FUNZIONE create_dataloaders MODIFICATA PER SPLIT SEQUENZIALE ---
+# --- FUNZIONE create_dataloaders (NESSUNA MODIFICA NECESSARIA QUI) ---
+# Questa funzione lavora sull'oggetto dataset già inizializzato e
+# la logica di split sequenziale, scaling e creazione dei DataLoader
+# rimane valida indipendentemente da come i dati sono stati caricati
+# nel dataset (da file multipli o singoli).
 def create_dataloaders(dataset, batch_size=128, train_ratio=0.7, val_ratio=0.15, seed=42):
     """
     Crea dataloader con SPLIT SEQUENZIALE del dataset e SCALA i dati.
@@ -216,6 +179,7 @@ def create_dataloaders(dataset, batch_size=128, train_ratio=0.7, val_ratio=0.15,
 
     # Estrai dati di training (NON SCALATI) usando gli indici SEQUENZIALI per fittare gli scaler
     print("Fitting scalers on the sequential training split...")
+    # Accede ai dati tramite l'oggetto dataset, che ora contiene i dati dal file singolo
     train_states_unscaled = dataset.states_for_scaling[train_indices]
     train_inputs_unscaled = dataset.inputs_for_scaling[train_indices]
 
