@@ -11,12 +11,12 @@ import os
 from scipy.stats import pearsonr
 
 # --- ADJUST THESE PARAMETERS ---
-NUM_EPOCHS = 500 # Maybe increase epochs if using annealing
+NUM_EPOCHS = 2000 # Maybe increase epochs if using annealing
 LEARNING_RATE = 5e-4 # Might need tuning
 BATCH_SIZE = 128 # Ensure >= 2
 
 # --- Physics Loss Parameters (Tune these based on paper/experiments) ---
-USE_ANNEALING = False       # Set to False to use fixed lambda_max
+USE_ANNEALING = True      # Set to False to use fixed lambda_max
 ANNEALING_CYCLES = 10       # M in paper (Number of cycles for lambda annealing)
 ANNEALING_RATIO = 0.5    # R in paper (Proportion of cycle at max lambda)
 LAMBDA_MAX = 1          # Max physics weight (lambda_max in paper)
