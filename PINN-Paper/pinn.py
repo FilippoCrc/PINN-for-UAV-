@@ -6,12 +6,13 @@ import numpy as np
 
 # --- QuadrotorPINN class remains unchanged ---
 class QuadrotorPINN(nn.Module):
-    def __init__(self, input_dim=12, hidden_dim=64, num_layers=6, output_dim=4):
+    def __init__(self, input_dim=12, hidden_dim=32, num_layers=3, output_dim=4):
         super(QuadrotorPINN, self).__init__()
         self.input_layer = nn.Linear(input_dim, hidden_dim)
         self.batch_norm_input = nn.BatchNorm1d(hidden_dim)
         self.hidden_layers = nn.ModuleList()
         self.batch_norms = nn.ModuleList()
+        self.dropout = nn.Dropout(0.2) # Dropout layer with 20% dropout rate
         for _ in range(num_layers):
             self.hidden_layers.append(nn.Linear(hidden_dim, hidden_dim))
             self.batch_norms.append(nn.BatchNorm1d(hidden_dim))
@@ -34,11 +35,13 @@ class QuadrotorPINN(nn.Module):
         if x.shape[0] > 1:
             x = self.batch_norm_input(x)
         x = F.relu(x)
+        x = self.dropout(x) # Apply dropout if needed
         for layer, bn in zip(self.hidden_layers, self.batch_norms):
             x = layer(x)
             if x.shape[0] > 1:
                 x = bn(x)
             x = F.relu(x)
+            x = self.dropout(x)
         control_output = self.output_layer(x)
         return control_output
 
@@ -85,24 +88,12 @@ class LocalMonotonicityLoss:
         if self.input_scale.shape[0] != 4:
              print(f"Warning: Expected input_scaler for 4 outputs, but scale shape is {self.input_scale.shape}")
 
+
     def _unscale_predictions(self, predictions_scaled, device):
-        """Unscale network output (thrust, torques)"""
         mean = self.input_mean.to(device)
         scale = self.input_scale.to(device)
-        # Ensure broadcasting works if scale/mean are not exactly (4,)
-        mean = mean.view(1, -1) # Shape (1, num_outputs)
-        scale = scale.view(1, -1) # Shape (1, num_outputs)
-        predictions_unscaled = predictions_scaled * scale + mean
-        # Extract torques/angular controls (assuming indices 1, 2, 3)
-        # Adjust indices if your control output order is different
-        if predictions_unscaled.shape[1] >= 4:
-            controls_angular_unscaled = predictions_unscaled[:, 1:4] # Shape: (B, 3)
-        else:
-            # Handle case where output dim < 4 - maybe only torque? Adjust as needed.
-            print(f"Warning: predictions_unscaled shape {predictions_unscaled.shape} unexpected. Assuming last {min(3, predictions_unscaled.shape[1])} are angular controls.")
-            controls_angular_unscaled = predictions_unscaled[:, -min(3, predictions_unscaled.shape[1]):]
-
-        return controls_angular_unscaled
+        predictions_unscaled = predictions_scaled * scale + mean  # Gradients flow here
+        return predictions_unscaled[:, 1:4]  # Extract angular controls
 
     def _calculate_annealing_lambda(self, epoch):
         """Calculates lambda_physics based on cyclical annealing schedule."""
@@ -149,6 +140,8 @@ class LocalMonotonicityLoss:
         Returns:
             tuple: (total_loss, mse_loss_item, physics_loss_item)
         """
+        # print("Time steps:", physics_info_batch[:, 0])
+        # print("Angular velocities:", physics_info_batch[:, 1:4])
         current_device = predictions_scaled.device
         batch_size = predictions_scaled.shape[0]
 
@@ -162,36 +155,31 @@ class LocalMonotonicityLoss:
 
         # 2. Local Monotonicity Physics Loss (LLM)
         # Unscale predicted angular controls/torques
-        controls_angular_pred_unscaled = self._unscale_predictions(predictions_scaled, current_device) # Shape (B, 3)
+        controls_angular_pred_unscaled = self._unscale_predictions(predictions_scaled, current_device)
+
+        # # Check gradients
+        # assert controls_angular_pred_unscaled.requires_grad, "Gradients not attached to controls_angular_pred_unscaled!"
+        # print("Gradients for controls_angular_pred_unscaled:", controls_angular_pred_unscaled.grad)
 
         # Extract unscaled time and omega from physics_info
         t = physics_info_batch[:, 0]        # Shape (B,)
-        omega = physics_info_batch[:, 1:4]  # Shape (B, 3) unscaled angular velocities
+        omega = physics_info_batch[:, 1:4]  # Shape (B, 3)
 
-        # --- Calculate Finite Differences for LLM ---
-        # We need changes between t and t+1
+        # --- Calculate Finite Differences for Angular Acceleration ---
         delta_t = t[1:] - t[:-1]                             # Shape (B-1,)
-        delta_omega_actual = omega[1:] - omega[:-1]          # Shape (B-1, 3), Change in actual omega
+        delta_omega_actual = (omega[1:] - omega[:-1]) / delta_t.unsqueeze(-1)  # Shape (B-1, 3)
 
-        # Predicted controls at time t and t+1
-        controls_angular_t = controls_angular_pred_unscaled[:-1] # Shape (B-1, 3)
-        controls_angular_tplus1 = controls_angular_pred_unscaled[1:] # Shape (B-1, 3)
-        delta_controls_angular_pred = controls_angular_tplus1 - controls_angular_t # Shape (B-1, 3)
+        # --- Get Predicted Controls (Exclude Last Sample to Match delta_omega) ---
+        controls_angular_pred_unscaled = self._unscale_predictions(predictions_scaled, current_device)  # Shape (B, 3)
+        controls_angular_pred_unscaled = controls_angular_pred_unscaled[:-1]  # Shape (B-1, 3) <-- FIX HERE
 
-        # --- Calculate LLM based on sign consistency ---
-        # Use tanh as differentiable sign approximation: sign(x) ≈ tanh(k*x)
-        # A high k makes it closer to sign, but can cause gradient issues. Start with k=1.
-        k_tanh = 1.0
+        # --- Calculate Sign Terms ---
+        k_tanh = 1000.0  # Increased from 10.0 to sharpen sign
+        sign_delta_omega = torch.tanh(k_tanh * delta_omega_actual)  # Shape (B-1, 3)
+        sign_controls = torch.tanh(k_tanh * controls_angular_pred_unscaled)  # Shape (B-1, 3)
 
-        # Compare signs component-wise (roll, pitch, yaw)
-        sign_delta_omega = torch.tanh(k_tanh * delta_omega_actual) # Shape (B-1, 3)
-        sign_delta_controls = torch.tanh(k_tanh * delta_controls_angular_pred) # Shape (B-1, 3)
-
-        # Monotonicity loss: Penalize if signs don't match
-        # Loss = 0.5 * (1 - sign(a)*sign(b)) -> 0 if signs match, 1 if they mismatch
-        monotonicity_term = 0.5 * (1.0 - sign_delta_omega * sign_delta_controls) # Shape (B-1, 3)
-
-        # Average over the 3 axes and the batch dimension
+        # --- Compute Loss ---
+        monotonicity_term = 0.5 * (1.0 - sign_delta_omega * sign_controls)  # Shape (B-1, 3)
         physics_loss = torch.mean(monotonicity_term)
 
         # 3. Get current lambda from annealing schedule
@@ -199,6 +187,8 @@ class LocalMonotonicityLoss:
 
         # 4. Total Loss
         total_loss = mse_loss + lambda_physics * physics_loss
-
+        # print("Angular acceleration (mean):", delta_omega_actual.mean().item())
+        # print("Control changes (mean):", delta_controls_angular_pred.mean().item())
+        # print("Gradients for angular controls:", controls_angular_pred_unscaled.grad)
         # Detach losses for history logging
         return total_loss, mse_loss.item(), physics_loss.item()

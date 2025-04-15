@@ -37,7 +37,7 @@ def train_pinn(model, criterion, optimizer, scheduler, train_loader, val_loader,
 
             optimizer.zero_grad()
             predictions = model(model_inputs) # Predict scaled control inputs
-
+       
             # --- MODIFIED: Call criterion with physics_info ---
             loss, mse_loss_item, physics_loss_item = criterion(
                 predictions, targets, physics_info, epoch

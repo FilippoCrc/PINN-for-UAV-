@@ -8,6 +8,7 @@ from pinn import QuadrotorPINN, LocalMonotonicityLoss
 from trainer import train_pinn
 import numpy as np
 import os
+from scipy.stats import pearsonr
 
 # --- ADJUST THESE PARAMETERS ---
 NUM_EPOCHS = 500 # Maybe increase epochs if using annealing
@@ -16,9 +17,9 @@ BATCH_SIZE = 128 # Ensure >= 2
 
 # --- Physics Loss Parameters (Tune these based on paper/experiments) ---
 USE_ANNEALING = True       # Set to False to use fixed lambda_max
-ANNEALING_CYCLES = 5       # M in paper (Number of cycles for lambda annealing)
-ANNEALING_RATIO = 0.5      # R in paper (Proportion of cycle at max lambda)
-LAMBDA_MAX = 0.1           # Max physics weight (lambda_max in paper)
+ANNEALING_CYCLES = 10       # M in paper (Number of cycles for lambda annealing)
+ANNEALING_RATIO = 0.5    # R in paper (Proportion of cycle at max lambda)
+LAMBDA_MAX = 1          # Max physics weight (lambda_max in paper)
 
 # --- MODIFIED: visualize_training_history (Added lambda plot) ---
 def visualize_training_history(history, loss_criterion=None):
@@ -72,6 +73,34 @@ def visualize_training_history(history, loss_criterion=None):
     plt.tight_layout()
     plt.show()
 
+def validate_physical_correlation(dataset):
+    """Plot delta_omega vs delta_controls and compute Pearson correlation."""
+    # Extract unscaled data from the dataset
+    omega_unscaled = dataset.omega_unscaled.numpy()  # Shape (N, 3)
+    times_unscaled = dataset.times_unscaled.numpy()  # Shape (N,)
+    controls_unscaled = dataset.model_targets_unscaled.numpy()  # Shape (N, 4)
+
+    # Compute delta_omega (angular acceleration)
+    delta_t = times_unscaled[1:] - times_unscaled[:-1]
+    delta_omega = (omega_unscaled[1:] - omega_unscaled[:-1]) / delta_t.reshape(-1, 1)  # Shape (N-1, 3)
+
+    # Compute delta_controls (change in torque inputs)
+    delta_controls = controls_unscaled[1:, 1:4] - controls_unscaled[:-1, 1:4]  # Skip thrust (column 0)
+
+    # Plot for each axis (x, y, z)
+    axes = ['x', 'y', 'z']
+    for i in range(3):
+        plt.figure(figsize=(8, 6))
+        plt.scatter(delta_omega[:, i], delta_controls[:, i], alpha=0.5, label='Data points')
+        
+        # Compute Pearson correlation
+        pcc, p_value = pearsonr(delta_omega[:, i], delta_controls[:, i])
+        plt.title(f"Delta Omega {axes[i]} vs Delta Control {axes[i]}\nPCC: {pcc:.2f}, p-value: {p_value:.2e}")
+        plt.xlabel(f"Angular Acceleration (Δω_{axes[i]})")
+        plt.ylabel(f"Control Change (Δτ_{axes[i]})")
+        plt.legend()
+        plt.grid(True)
+        plt.show()
 # evaluate_model remains the same
 def evaluate_model(model, test_loader, device, input_scaler):
     """Valuta il modello sul test set (MSE on control inputs) e visualizza."""
@@ -138,6 +167,8 @@ def main():
     try:
         dataset = QuadrotorDataset(state_csv_path=state_csv_for_model_input,
                                    input_csv_path=input_csv_for_model_target)
+        print("\nValidating physical correlation...")
+        validate_physical_correlation(dataset)
         # MUST use shuffle=False, drop_last=True for train/val for physics loss
         train_loader, val_loader, test_loader, state_scaler, input_scaler = create_dataloaders(
             dataset, batch_size=BATCH_SIZE, shuffle_train_val=False, drop_last_train_val=True
@@ -168,7 +199,7 @@ def main():
         print(f"ERROR initializing loss function: {e}")
         return
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
     # Scheduler (OneCycleLR often works well)
     total_steps = NUM_EPOCHS * len(train_loader) if train_loader and len(train_loader) > 0 else NUM_EPOCHS
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
