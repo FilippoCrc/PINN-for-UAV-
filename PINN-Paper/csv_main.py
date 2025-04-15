@@ -16,7 +16,7 @@ LEARNING_RATE = 5e-4 # Might need tuning
 BATCH_SIZE = 128 # Ensure >= 2
 
 # --- Physics Loss Parameters (Tune these based on paper/experiments) ---
-USE_ANNEALING = True       # Set to False to use fixed lambda_max
+USE_ANNEALING = False       # Set to False to use fixed lambda_max
 ANNEALING_CYCLES = 10       # M in paper (Number of cycles for lambda annealing)
 ANNEALING_RATIO = 0.5    # R in paper (Proportion of cycle at max lambda)
 LAMBDA_MAX = 1          # Max physics weight (lambda_max in paper)
@@ -74,30 +74,33 @@ def visualize_training_history(history, loss_criterion=None):
     plt.show()
 
 def validate_physical_correlation(dataset):
-    """Plot delta_omega vs delta_controls and compute Pearson correlation."""
+    """Plot torque (τ) vs angular acceleration (Δω) and compute Pearson correlation."""
     # Extract unscaled data from the dataset
     omega_unscaled = dataset.omega_unscaled.numpy()  # Shape (N, 3)
     times_unscaled = dataset.times_unscaled.numpy()  # Shape (N,)
     controls_unscaled = dataset.model_targets_unscaled.numpy()  # Shape (N, 4)
 
-    # Compute delta_omega (angular acceleration)
-    delta_t = times_unscaled[1:] - times_unscaled[:-1]
+    # --- Compute angular acceleration (Δω) ---
+    delta_t = times_unscaled[1:] - times_unscaled[:-1]  # Shape (N-1,)
     delta_omega = (omega_unscaled[1:] - omega_unscaled[:-1]) / delta_t.reshape(-1, 1)  # Shape (N-1, 3)
 
-    # Compute delta_controls (change in torque inputs)
-    delta_controls = controls_unscaled[1:, 1:4] - controls_unscaled[:-1, 1:4]  # Skip thrust (column 0)
+    # --- Extract torque values (τ_x, τ_y, τ_z) ---
+    # Assuming columns 1-3 are torques (skip thrust in column 0)
+    torques = controls_unscaled[:, 1:4]  # Shape (N, 3)
+    # Align with delta_omega (exclude last torque sample)
+    torques_aligned = torques[:-1, :]  # Shape (N-1, 3)
 
     # Plot for each axis (x, y, z)
     axes = ['x', 'y', 'z']
     for i in range(3):
         plt.figure(figsize=(8, 6))
-        plt.scatter(delta_omega[:, i], delta_controls[:, i], alpha=0.5, label='Data points')
+        plt.scatter(delta_omega[:, i], torques_aligned[:, i], alpha=0.5, label='Data points')
         
         # Compute Pearson correlation
-        pcc, p_value = pearsonr(delta_omega[:, i], delta_controls[:, i])
-        plt.title(f"Delta Omega {axes[i]} vs Delta Control {axes[i]}\nPCC: {pcc:.2f}, p-value: {p_value:.2e}")
-        plt.xlabel(f"Angular Acceleration (Δω_{axes[i]})")
-        plt.ylabel(f"Control Change (Δτ_{axes[i]})")
+        pcc, p_value = pearsonr(delta_omega[:, i], torques_aligned[:, i])
+        plt.title(f"Angular Acceleration (Δω_{axes[i]}) vs Torque (τ_{axes[i]})\nPCC: {pcc:.2f}, p-value: {p_value:.2e}")
+        plt.xlabel(f"Δω_{axes[i]} [rad/s²]")
+        plt.ylabel(f"τ_{axes[i]} [Nm]")
         plt.legend()
         plt.grid(True)
         plt.show()
