@@ -7,10 +7,10 @@ from trainer import train_pinn
 import numpy as np
 import os
 
-NUM_EPOCHS = 2000
-LEARNING_RATE = 1e-4 # Adjust as needed
-PHYSICS_LOSS_WEIGHT = 1.0 # Weight for rotational dynamics loss term (tune this!)
-BATCH_SIZE = 128 # Ensure > 1
+NUM_EPOCHS = 1500
+LEARNING_RATE = 3e-4 # Adjust as needed
+PHYSICS_LOSS_WEIGHT = 1.2 # Weight for rotational dynamics loss term (tune this!)
+BATCH_SIZE = 64 # Ensure > 1
 
 # --- MODIFIED: visualize_training_history (re-add physics plot) ---
 def visualize_training_history(history):
@@ -160,7 +160,7 @@ def main():
         print(f"ERROR initializing loss function: {e}")
         return
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
     # Scheduler (adjust if needed)
     total_steps = NUM_EPOCHS * len(train_loader) if train_loader and len(train_loader) > 0 else NUM_EPOCHS
     scheduler = torch.optim.lr_scheduler.OneCycleLR(

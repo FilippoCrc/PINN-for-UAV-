@@ -5,12 +5,13 @@ import numpy as np
 
 # QuadrotorPINN class remains the same as in the previous 'State -> Control Input' version
 class QuadrotorPINN(nn.Module):
-    def __init__(self, input_dim=12, hidden_dim=64, num_layers=6, output_dim=4):
+    def __init__(self, input_dim=12, hidden_dim=32, num_layers=3, output_dim=4):
         super(QuadrotorPINN, self).__init__()
         self.input_layer = nn.Linear(input_dim, hidden_dim)
         self.batch_norm_input = nn.BatchNorm1d(hidden_dim)
         self.hidden_layers = nn.ModuleList()
         self.batch_norms = nn.ModuleList()
+        self.dropout = nn.Dropout(0.3) # Dropout layer with 20% dropout rate
         for _ in range(num_layers):
             self.hidden_layers.append(nn.Linear(hidden_dim, hidden_dim))
             self.batch_norms.append(nn.BatchNorm1d(hidden_dim))
@@ -29,12 +30,17 @@ class QuadrotorPINN(nn.Module):
 
     def forward(self, state_input):
         x = self.input_layer(state_input)
-        x = self.batch_norm_input(x)
+        # Handle potential batch size 1 during evaluation/inference if BN used
+        if x.shape[0] > 1:
+            x = self.batch_norm_input(x)
         x = F.relu(x)
+        x = self.dropout(x) # Apply dropout if needed
         for layer, bn in zip(self.hidden_layers, self.batch_norms):
             x = layer(x)
-            x = bn(x)
+            if x.shape[0] > 1:
+                x = bn(x)
             x = F.relu(x)
+            x = self.dropout(x)
         control_output = self.output_layer(x)
         return control_output
 
