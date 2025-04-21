@@ -128,8 +128,8 @@ def main():
     torch.manual_seed(42); np.random.seed(42)
     print(f"Using device: {device}")
 
-    state_csv_for_model_input = "state_results.csv"
-    input_csv_for_model_target = "input_results.csv"
+    state_csv_for_model_input = "state_results_validation.csv"
+    input_csv_for_model_target = "input_results_validation.csv"
     print(f"Looking for data files:\n State (Input): {state_csv_for_model_input}\n Control (Target): {input_csv_for_model_target}")
 
     print("\nLoading dataset...")
