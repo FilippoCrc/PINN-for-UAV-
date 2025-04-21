@@ -7,8 +7,8 @@ from trainer import train_pinn
 import numpy as np
 import os
 
-NUM_EPOCHS = 1500
-LEARNING_RATE = 3e-4 # Adjust as needed
+NUM_EPOCHS = 2000
+LEARNING_RATE = 5e-4 # Adjust as needed
 PHYSICS_LOSS_WEIGHT = 1.2 # Weight for rotational dynamics loss term (tune this!)
 BATCH_SIZE = 64 # Ensure > 1
 
