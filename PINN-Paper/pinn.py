@@ -149,9 +149,18 @@ class LocalMonotonicityLoss:
             mse_loss = F.mse_loss(predictions_scaled, targets_scaled)
             return mse_loss, mse_loss.item(), 0.0 # No physics loss possible
 
-        # 1. MSE Loss (calculated on the first B-1 samples to match physics diff length)
-        # We compare prediction at t with target at t.
-        mse_loss = F.mse_loss(predictions_scaled[:-1], targets_scaled[:-1])
+        thrust_pred = predictions_scaled[:-1, 0]  # Scaled thrust (B-1,)
+        thrust_target = targets_scaled[:-1, 0]
+        tau_pred = predictions_scaled[:-1, 1:4]   # Scaled tau (B-1, 3)
+        tau_target = targets_scaled[:-1, 1:4]
+
+        # Compute separate MSE losses
+        mse_thrust = F.mse_loss(thrust_pred, thrust_target)
+        mse_tau = F.mse_loss(tau_pred, tau_target)
+        print("MSE thrust loss:", mse_thrust.item())
+        print("MSE tau loss:", mse_tau.item())
+        # Combine with optional weights (adjust weights empirically)
+        mse_loss = mse_thrust + 1.0 * mse_tau  # Equal weights if scaled properly
 
         # 2. Local Monotonicity Physics Loss (LLM)
         # Unscale predicted angular controls/torques
