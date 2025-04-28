@@ -157,8 +157,8 @@ class LocalMonotonicityLoss:
         # Compute separate MSE losses
         mse_thrust = F.mse_loss(thrust_pred, thrust_target)
         mse_tau = F.mse_loss(tau_pred, tau_target)
-        print("MSE thrust loss:", mse_thrust.item())
-        print("MSE tau loss:", mse_tau.item())
+        # print("MSE thrust loss:", mse_thrust.item())
+        # print("MSE tau loss:", mse_tau.item())
         # Combine with optional weights (adjust weights empirically)
         mse_loss = mse_thrust + 1.0 * mse_tau  # Equal weights if scaled properly
 

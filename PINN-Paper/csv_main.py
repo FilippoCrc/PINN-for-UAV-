@@ -114,6 +114,7 @@ def evaluate_model(model, test_loader, device, input_scaler):
 
     print("\nEvaluating control input prediction on test set...")
     with torch.no_grad():
+        # Loop remains the same
         for model_inputs, targets, _ in test_loader: # Ignore physics_info
             model_inputs = model_inputs.to(device)
             targets = targets.to(device)
@@ -123,7 +124,8 @@ def evaluate_model(model, test_loader, device, input_scaler):
             predictions_list.append(predictions.cpu())
             targets_list.append(targets.cpu())
 
-            test_mse_loss_accum += torch.nn.functional.mse_loss(predictions, targets).item()
+            # Ensure targets are float for mse_loss if they aren't
+            test_mse_loss_accum += torch.nn.functional.mse_loss(predictions, targets.float()).item()
 
     all_predictions_scaled = torch.cat(predictions_list)
     all_targets_scaled = torch.cat(targets_list)
@@ -133,27 +135,61 @@ def evaluate_model(model, test_loader, device, input_scaler):
 
     if input_scaler:
         try:
+            # Ensure data is numpy for scaler
             all_predictions_unscaled = input_scaler.inverse_transform(all_predictions_scaled.numpy())
             all_targets_unscaled = input_scaler.inverse_transform(all_targets_scaled.numpy())
 
-            num_points_to_plot = min(200, len(all_targets_unscaled))
-            plt.figure(figsize=(14, 7))
-            # Plotting assumes output order: Thrust, Tau_x, Tau_y, Tau_z
-            plt.subplot(1, 2, 1) # Example: Thrust (Index 0)
-            plt.plot(all_targets_unscaled[:num_points_to_plot, 0], label=f'True Control[0]', linestyle='--')
-            plt.plot(all_predictions_unscaled[:num_points_to_plot, 0], label=f'Predicted Control[0]', alpha=0.8)
-            plt.title(f'Example: Control[0] (Test Set)')
-            plt.xlabel('Time Step'); plt.ylabel('Control Value (unscaled)')
-            plt.legend(); plt.grid(True)
-            plt.subplot(1, 2, 2) # Example: Tau_x (Index 1)
-            plt.plot(all_targets_unscaled[:num_points_to_plot, 1], label=f'True Control[1]', linestyle='--')
-            plt.plot(all_predictions_unscaled[:num_points_to_plot, 1], label=f'Predicted Control[1]', alpha=0.8)
-            plt.title(f'Example: Control[1] (Test Set)')
-            plt.xlabel('Time Step'); plt.ylabel('Control Value (unscaled)')
-            plt.legend(); plt.grid(True)
-            plt.tight_layout(); plt.show()
+            num_points_to_plot = min(200, len(all_targets_unscaled)) # Limit points for clarity
+
+            # --- MODIFIED PLOTTING SECTION ---
+            plt.figure(figsize=(14, 10)) # Adjusted figure size for 2x2 grid
+            control_names = ['Thrust', 'Tau_x', 'Tau_y', 'Tau_z'] # Assuming this order
+            num_outputs = all_targets_unscaled.shape[1] # Should be 4
+
+            if num_outputs != 4:
+                print(f"Warning: Expected 4 control outputs for plotting, but found {num_outputs}. Adjusting plot.")
+                control_names = [f'Control[{i}]' for i in range(num_outputs)] # Generic names
+
+            plot_rows = int(np.ceil(num_outputs / 2.0))
+            plot_cols = 2
+
+            for i in range(num_outputs):
+                plt.subplot(plot_rows, plot_cols, i + 1) # Create subplot (1-based index)
+                plt.plot(all_targets_unscaled[:num_points_to_plot, i], label=f'True {control_names[i]}', linestyle='--')
+                plt.plot(all_predictions_unscaled[:num_points_to_plot, i], label=f'Predicted {control_names[i]}', alpha=0.8)
+                plt.title(f'Example: {control_names[i]} (Output Index {i}) (Test Set)')
+                plt.xlabel('Time Step (Sample Index)')
+                plt.ylabel('Control Value (unscaled)')
+                plt.legend()
+                plt.grid(True)
+
+            plt.tight_layout()
+            plt.show()
+            # --- END OF MODIFIED PLOTTING SECTION ---
+
+        except AttributeError as e:
+             print(f"Plotting Error: Input scaler might not have 'inverse_transform' or data format issue. {e}")
+             print("Plotting scaled data instead as fallback.")
+             # Fallback to plotting scaled data if unscaling fails
+             num_points_to_plot = min(200, len(all_targets_scaled))
+             plt.figure(figsize=(14, 10))
+             control_names = [f'Scaled Control[{i}]' for i in range(all_targets_scaled.shape[1])]
+             num_outputs = all_targets_scaled.shape[1]
+             plot_rows = int(np.ceil(num_outputs / 2.0))
+             plot_cols = 2
+             for i in range(num_outputs):
+                 plt.subplot(plot_rows, plot_cols, i + 1)
+                 plt.plot(all_targets_scaled[:num_points_to_plot, i].numpy(), label=f'True {control_names[i]}', linestyle='--')
+                 plt.plot(all_predictions_scaled[:num_points_to_plot, i].numpy(), label=f'Predicted {control_names[i]}', alpha=0.8)
+                 plt.title(f'Example: {control_names[i]} (Output Index {i}) (Test Set - Scaled)')
+                 plt.xlabel('Time Step (Sample Index)')
+                 plt.ylabel('Control Value (scaled)')
+                 plt.legend(); plt.grid(True)
+             plt.tight_layout(); plt.show()
+
         except Exception as e:
-            print(f"Could not plot unscaled control data: {e}")
+            print(f"An unexpected error occurred during plotting: {e}")
+
 
     return avg_test_mse
 
@@ -162,8 +198,8 @@ def main():
     torch.manual_seed(42); np.random.seed(42)
     print(f"Using device: {device}")
 
-    state_csv_for_model_input = "state_results_validation.csv"
-    input_csv_for_model_target = "input_results_validation.csv"
+    state_csv_for_model_input = "state_results_long.csv"
+    input_csv_for_model_target = "input_results_long.csv"
     print(f"Looking for data files:\n State (Input): {state_csv_for_model_input}\n Control (Target): {input_csv_for_model_target}")
 
     print("\nLoading dataset...")
