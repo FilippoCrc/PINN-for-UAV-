@@ -7,7 +7,7 @@ from trainer import train_pinn
 import numpy as np
 import os
 
-NUM_EPOCHS = 2000
+NUM_EPOCHS = 1000
 LEARNING_RATE = 5e-4 # Adjust as needed
 PHYSICS_LOSS_WEIGHT = 1.2 # Weight for rotational dynamics loss term (tune this!)
 BATCH_SIZE = 64 # Ensure > 1
@@ -128,8 +128,8 @@ def main():
     torch.manual_seed(42); np.random.seed(42)
     print(f"Using device: {device}")
 
-    state_csv_for_model_input = "state_results_validation.csv"
-    input_csv_for_model_target = "input_results_validation.csv"
+    state_csv_for_model_input = "state_results_long.csv"
+    input_csv_for_model_target = "input_results_long.csv"
     print(f"Looking for data files:\n State (Input): {state_csv_for_model_input}\n Control (Target): {input_csv_for_model_target}")
 
     print("\nLoading dataset...")
